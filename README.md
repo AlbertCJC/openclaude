@@ -1,36 +1,70 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# OpenClaude
 
-## Getting Started
+A Claude-style desktop assistant that works with any OpenAI-compatible model, including free ones. Pick a provider, paste a key, and the model can read and edit files in your workspace, run commands, search the web, and build live HTML artifacts, with your approval for anything that changes your machine.
 
-First, run the development server:
+## Features
+- **Any provider:** OpenRouter, Groq, Google AI Studio (Gemini), NVIDIA NIM, Cerebras, Mistral, DeepSeek, Together AI, OpenAI, plus local Ollama and LM Studio. Add any other OpenAI-compatible endpoint as a custom provider.
+- **Multiple keys per provider:** key 1 is used first; on an auth or rate-limit error the next key is tried.
+- **Agent tools:** `list_files`, `read_file`, `grep`, `write_file`, `edit_file`, `bash`, `web_fetch`, `web_search`, `create_artifact`. Up to 20 tool steps per reply.
+- **Permission modes:** *Ask before edits*, *Auto-edit* (still asks before shell commands), *Plan* (read-only).
+- **Artifacts:** HTML pages open in a resizable side panel with Preview, Code, Copy and Download. They run in a sandboxed frame.
+- **Desktop app:** Electron wrapper with a native folder picker. The server only listens on `127.0.0.1`.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## Quick start (desktop)
+Download the installer from Releases, or build it yourself:
+
+```powershell
+git clone https://github.com/AlbertCJC/openclaude.git
+cd openclaude
+npm install
+npm run dist
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The installer is written to `dist-desktop/`. It isn't code-signed, so Windows SmartScreen will warn on first run.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Development
+```powershell
+npm run dev            # web UI at http://localhost:3000
+npm run desktop:build  # production build, then open the Electron window
+node --experimental-strip-types scripts/check-jail.mjs   # workspace path-jail check
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Using it
+1. Click **Add API key** in the top bar (or **Providers and API keys** in the sidebar).
+2. Open a provider, click **Add key**, paste the key and save. Free keys: [OpenRouter](https://openrouter.ai/keys), [Groq](https://console.groq.com/keys), [Google AI Studio](https://aistudio.google.com/apikey), [NVIDIA NIM](https://build.nvidia.com/settings/api-keys).
+3. Pick a model in the top bar. Models are written `provider-id/model-id`, for example `groq/llama-3.3-70b-versatile`.
+4. Choose a workspace folder in the sidebar. File tools can't reach outside it.
 
-## Learn More
+## Where data is stored
+- Settings and API keys: `%APPDATA%\openclaude\config.json` in the desktop app, or `data/config.json` when running `npm run dev`. Keys are stored as plain text for now; never commit this file.
+- Desktop log: `%APPDATA%\openclaude\main.log`.
 
-To learn more about Next.js, take a look at the following resources:
+## Project layout
+```
+app/page.tsx          chat UI, artifact panel
+app/Providers.tsx     providers and API key dialog
+app/api/chat          agent loop (AI SDK streamText + tools + approvals)
+app/api/config        read and save settings (keys masked)
+app/api/models        list a provider's models
+lib/config.ts         provider catalog and settings file
+lib/tools.ts          tools and workspace path jail
+electron/             desktop shell and preload
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Known limitations
+- Chat history isn't saved yet.
+- Models without native tool calling aren't supported yet.
+- MCP connectors, skills, projects and memory are planned.
+- See the security notes in the roadmap below before exposing the app to untrusted content.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Roadmap
+- Require a per-launch token on the local API so other programs can't call it.
+- Block `web_fetch` from reaching local and private network addresses.
+- Resolve symlinks in the workspace path check.
+- Encrypt stored API keys with the OS keychain.
+- Chat history, MCP connectors, skills, projects, memory.
 
-## Deploy on Vercel
+## License
+MIT, see [LICENSE](LICENSE). Third-party licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+OpenClaude is an independent project and is not affiliated with Anthropic.
