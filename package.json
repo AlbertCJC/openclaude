@@ -12,6 +12,7 @@
     "dist": "next build && electron-builder --win"
   },
   "dependencies": {
+    "@ai-sdk/mcp": "^2.0.105",
     "@ai-sdk/openai-compatible": "^3.0.95",
     "@ai-sdk/react": "^4.0.187",
     "ai": "^7.0.182",
