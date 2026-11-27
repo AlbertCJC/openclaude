@@ -1,4 +1,4 @@
-// Self-check for phase-2 server logic. Run: npx tsx scripts/selfcheck.ts
+// Self-check for phase-2 server logic. Run: npm test
 import assert from 'assert';
 import { promises as fs } from 'fs';
 import os from 'os';
