@@ -8,6 +8,8 @@ import { setWorkspace, tools, webSearch } from '../lib/tools';
 import { listSkills } from '../lib/skills';
 import { runHooks } from '../lib/hooks';
 import { readJob, startJob } from '../lib/jobs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { authorized } = require('../electron/auth.js');
 
 const call = (t: { execute?: (...a: never[]) => unknown }, input: unknown) => (t.execute as (i: unknown, o: unknown) => Promise<string>)(input, {});
 
@@ -65,6 +67,15 @@ async function main() {
   assert.strictEqual(await webSearch('q', { search: 'brave', keys: { brave: ['k'] } }), 'D x — https://d.dev');
   assert.deepStrictEqual(hit, ['api.search.brave.com', 'html.duckduckgo.com']);
   globalThis.fetch = realFetch;
+  const T = 'a'.repeat(64);
+  const rq = (h: Record<string, string>) => ({ headers: { host: '127.0.0.1:5000', cookie: `oc_token=${T}`, ...h } });
+  assert(authorized(rq({}), T, 5000));
+  assert(authorized(rq({ origin: 'http://127.0.0.1:5000', cookie: `x=1; oc_token=${T}` }), T, 5000));
+  assert(!authorized(rq({ cookie: '' }), T, 5000));
+  assert(!authorized(rq({ cookie: `oc_token=${'b'.repeat(64)}` }), T, 5000));
+  assert(!authorized(rq({ cookie: 'oc_token=a' }), T, 5000));
+  assert(!authorized(rq({ host: 'evil.com:5000' }), T, 5000));
+  assert(!authorized(rq({ origin: 'https://evil.com' }), T, 5000));
 
   await fs.rm(ws, { recursive: true, force: true });
   console.log('selfcheck ok');
