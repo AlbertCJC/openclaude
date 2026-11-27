@@ -1,4 +1,4 @@
-// Run: node --experimental-strip-types scripts/check-jail.mjs
+// Run: npm test
 import assert from 'node:assert';
 const { jail } = await import('../lib/tools.ts');
 assert.ok(jail('README.md').endsWith('README.md'));

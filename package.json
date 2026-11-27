@@ -6,12 +6,15 @@
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
     "start": "next start",
-    "lint": "eslint",
+    "lint": "eslint .",
     "desktop": "electron .",
     "desktop:build": "next build && electron .",
-    "dist": "next build && electron-builder --win"
+    "dist": "next build && electron-builder --win",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx scripts/check-jail.mjs && tsx scripts/selfcheck.ts"
   },
   "dependencies": {
+    "@ai-sdk/mcp": "^2.0.105",
     "@ai-sdk/openai-compatible": "^3.0.95",
     "@ai-sdk/react": "^4.0.187",
     "ai": "^7.0.182",
@@ -32,6 +35,7 @@
     "electron-builder": "^26.18.0",
     "eslint": "^9",
     "eslint-config-next": "15.5.4",
+    "tsx": "^4.23.15",
     "typescript": "^5"
   },
   "main": "electron/main.js",

@@ -17,8 +17,16 @@ const eslintConfig = [
       ".next/**",
       "out/**",
       "build/**",
+      "release/**",
+      "dist-desktop/**",
+      "data/**",
       "next-env.d.ts",
     ],
+  },
+  {
+    // Electron main process is CommonJS on purpose.
+    files: ["electron/**/*.js"],
+    rules: { "@typescript-eslint/no-require-imports": "off" },
   },
 ];
 
