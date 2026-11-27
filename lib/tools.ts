@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
+import { killJob, readJob, startJob } from './jobs';
 
 export let WORKSPACE = path.resolve(process.env.WORKSPACE || process.cwd());
 export const setWorkspace = (w: string) => { WORKSPACE = path.resolve(w); }; // ponytail: module-global, fine for single-user desktop app
@@ -27,19 +28,38 @@ async function walk(dir: string, out: string[] = [], depth = 0): Promise<string[
 
 const clip = (s: string, n = 20000) => (s.length > n ? s.slice(0, n) + `\n…[truncated ${s.length - n} chars]` : s);
 
+type Cell = { cell_type: string; source: string | string[]; outputs?: { text?: string | string[]; data?: Record<string, unknown>; ename?: string; evalue?: string }[] };
+const joinSrc = (x: string | string[] | undefined) => (Array.isArray(x) ? x.join('') : x ?? '');
+function renderNotebook(json: string) {
+  const nb = JSON.parse(json) as { cells: Cell[] };
+  return nb.cells.map((c, i) => {
+    const outs = (c.outputs ?? []).map(o => o.ename ? `${o.ename}: ${o.evalue}` : joinSrc(o.text) || joinSrc(o.data?.['text/plain'] as string[]) || (o.data ? `[${Object.keys(o.data).join(', ')}]` : '')).filter(Boolean);
+    return `<cell ${i} ${c.cell_type}>\n${joinSrc(c.source)}${outs.length ? `\n<output>\n${outs.join('\n')}\n</output>` : ''}\n</cell>`;
+  }).join('\n');
+}
+
+const run = (command: string) => new Promise<string>(res =>
+  exec(command, { cwd: WORKSPACE, timeout: 120000, maxBuffer: 1 << 22 }, (err, stdout, stderr) =>
+    res(clip(`${stdout}${stderr}${err ? `\n[exit ${err.code ?? 'error'}]` : ''}`))));
+const exists = (f: string) => fs.stat(path.join(WORKSPACE, f)).then(() => true, () => false);
+
 export const tools = {
   list_files: tool({
-    description: 'List files in the workspace (recursive). Optional substring filter.',
+    description: 'List files in the workspace (recursive). Optional filter: a glob like "src/**/*.ts" or a plain substring.',
     inputSchema: z.object({ dir: z.string().default('.'), filter: z.string().optional() }),
     execute: async ({ dir, filter }) => {
       const files = await walk(jail(dir));
-      return (filter ? files.filter(f => f.includes(filter)) : files).slice(0, 500).join('\n');
+      const match = !filter ? () => true : /[*?]/.test(filter) ? (f: string) => path.matchesGlob(f, filter) : (f: string) => f.includes(filter);
+      return files.filter(match).slice(0, 500).join('\n') || 'No files';
     },
   }),
   read_file: tool({
     description: 'Read a text file from the workspace.',
     inputSchema: z.object({ path: z.string() }),
-    execute: async ({ path: p }) => clip(await fs.readFile(jail(p), 'utf8')),
+    execute: async ({ path: p }) => {
+      const text = await fs.readFile(jail(p), 'utf8');
+      return clip(p.endsWith('.ipynb') ? renderNotebook(text) : text);
+    },
   }),
   grep: tool({
     description: 'Search file contents in the workspace with a regex. Returns path:line: text.',
@@ -77,13 +97,55 @@ export const tools = {
     },
   }),
   bash: tool({
-    description: 'Run a shell command in the workspace (60s timeout).',
-    inputSchema: z.object({ command: z.string() }),
-    execute: ({ command }) =>
-      new Promise<string>(res =>
-        exec(command, { cwd: WORKSPACE, timeout: 60000, maxBuffer: 1 << 22 }, (err, stdout, stderr) =>
-          res(clip(`${stdout}${stderr}${err ? `\n[exit ${err.code ?? 'error'}]` : ''}`))),
-      ),
+    description: 'Run a shell command in the workspace (120s timeout). Set run_in_background for servers/watchers/long builds; then read output with bash_output.',
+    inputSchema: z.object({ command: z.string(), run_in_background: z.boolean().optional() }),
+    execute: async ({ command, run_in_background }) =>
+      run_in_background ? `Started ${startJob(command, WORKSPACE)}. Read output with bash_output.` : run(command),
+  }),
+  bash_output: tool({
+    description: 'Read new output from a background job since the last read, plus its status. Optional regex filter on lines.',
+    inputSchema: z.object({ id: z.string(), filter: z.string().optional() }),
+    execute: async ({ id, filter }) => readJob(id, filter),
+  }),
+  kill_job: tool({
+    description: 'Stop a background job.',
+    inputSchema: z.object({ id: z.string() }),
+    execute: async ({ id }) => killJob(id),
+  }),
+  notebook_edit: tool({
+    description: 'Edit a Jupyter notebook cell: replace its source, insert a new cell at cell_index, or delete it.',
+    inputSchema: z.object({
+      path: z.string(), cell_index: z.number().int().min(0), new_source: z.string().default(''),
+      mode: z.enum(['replace', 'insert', 'delete']).default('replace'), cell_type: z.enum(['code', 'markdown']).optional(),
+    }),
+    execute: async ({ path: p, cell_index, new_source, mode, cell_type }) => {
+      const f = jail(p);
+      const nb = JSON.parse(await fs.readFile(f, 'utf8')) as { cells: Record<string, unknown>[] };
+      if (mode !== 'insert' && !nb.cells[cell_index]) throw new Error(`No cell ${cell_index} (notebook has ${nb.cells.length})`);
+      const source = new_source.split(/(?<=\n)/);
+      if (mode === 'delete') nb.cells.splice(cell_index, 1);
+      else if (mode === 'insert') {
+        const type = cell_type ?? 'code';
+        nb.cells.splice(cell_index, 0, type === 'code' ? { cell_type: type, source, metadata: {}, outputs: [], execution_count: null } : { cell_type: type, source, metadata: {} });
+      } else {
+        Object.assign(nb.cells[cell_index], { source }, cell_type ? { cell_type } : {});
+        if (nb.cells[cell_index].cell_type === 'code') Object.assign(nb.cells[cell_index], { outputs: [], execution_count: null });
+      }
+      await fs.writeFile(f, JSON.stringify(nb, null, 1) + '\n');
+      return `${mode === 'insert' ? 'Inserted' : mode === 'delete' ? 'Deleted' : 'Replaced'} cell ${cell_index} in ${p}`;
+    },
+  }),
+  diagnostics: tool({
+    description: "Run the project's type checker/linter (tsc, cargo check, go vet, ruff/pyright) and return errors as path:line: message.",
+    inputSchema: z.object({}),
+    execute: async () => {
+      if (await exists('tsconfig.json')) return run('npx --no-install tsc --noEmit --pretty false');
+      if (await exists('Cargo.toml')) return run('cargo check --message-format short');
+      if (await exists('go.mod')) return run('go vet ./...');
+      if (await exists('pyproject.toml') || await exists('setup.py') || await exists('requirements.txt'))
+        return run('ruff check --output-format concise . || pyright');
+      return 'No known checker for this project (looked for tsconfig.json, Cargo.toml, go.mod, Python config).';
+    },
   }),
   web_fetch: tool({
     description: 'Fetch a URL and return its text content (HTML stripped).',
@@ -114,6 +176,20 @@ export const tools = {
     inputSchema: z.object({ title: z.string(), html: z.string() }),
     execute: async ({ title }) => `Artifact "${title}" shown to user.`,
   }),
+  todo_write: tool({
+    description: 'Write the full task list for multi-step work (replaces the previous list). Keep exactly one item in_progress.',
+    inputSchema: z.object({ todos: z.array(z.object({ content: z.string(), status: z.enum(['pending', 'in_progress', 'completed']) })) }),
+    execute: async ({ todos }) => `Task list updated (${todos.filter(t => t.status === 'completed').length}/${todos.length} done).`,
+  }),
+  // No execute: answered in the UI via addToolOutput.
+  ask_user: tool({
+    description: 'Ask the user a multiple-choice question when blocked on their decision. The user may also type a custom answer.',
+    inputSchema: z.object({ question: z.string(), options: z.array(z.string()).min(2).max(4) }),
+  }),
+  exit_plan_mode: tool({
+    description: 'In plan mode, present the finished plan (markdown) for approval. If approved, mode switches to Auto-edit and you may implement.',
+    inputSchema: z.object({ plan: z.string() }),
+  }),
 };
 
-export const WRITE_TOOLS = ['write_file', 'edit_file', 'bash'];
+export const WRITE_TOOLS = ['write_file', 'edit_file', 'bash', 'notebook_edit', 'kill_job'];

@@ -1,6 +1,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
+import type { McpServer } from './mcp';
 
 export type Provider = { id: string; name: string; baseURL: string; keyName: string; keysUrl?: string; example: string; local?: boolean };
 
@@ -25,11 +26,16 @@ export type Config = {
   model: string;                       // "<provider-id>/<model-id>"
   workspace: string;
   mode: 'ask' | 'auto' | 'plan';
+  effort: 'low' | 'medium' | 'high';
+  mcpServers: Record<string, McpServer>;
+  hooks: Record<string, unknown[]>;    // Claude Code settings.json hook format also accepted
+  trustedWorkspaces: string[];         // project .claude/settings.json hooks only run here
+  allowBash: string[];                 // command prefixes that skip approval
 };
 
-const DATA = process.env.OPENCLAUDE_DATA || path.join(process.cwd(), 'data');
+export const DATA = process.env.OPENCLAUDE_DATA || path.join(process.cwd(), 'data');
 const FILE = path.join(DATA, 'config.json');
-const DEFAULTS: Config = { keys: {}, custom: [], model: 'open_router/openrouter/free', workspace: os.homedir(), mode: 'ask' };
+const DEFAULTS: Config = { keys: {}, custom: [], model: 'open_router/openrouter/free', workspace: os.homedir(), mode: 'ask', effort: 'medium', mcpServers: {}, hooks: {}, trustedWorkspaces: [], allowBash: [] };
 
 export async function loadConfig(): Promise<Config> {
   try { return { ...DEFAULTS, ...JSON.parse(await fs.readFile(FILE, 'utf8')) }; } catch { return { ...DEFAULTS }; }
