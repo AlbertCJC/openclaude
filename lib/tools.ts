@@ -4,6 +4,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
 import { killJob, readJob, startJob } from './jobs';
+import { loadConfig, SEARCH_PROVIDERS, type Config } from './config';
 
 export let WORKSPACE = path.resolve(process.env.WORKSPACE || process.cwd());
 export const setWorkspace = (w: string) => { WORKSPACE = path.resolve(w); }; // ponytail: module-global, fine for single-user desktop app
@@ -27,6 +28,42 @@ async function walk(dir: string, out: string[] = [], depth = 0): Promise<string[
 }
 
 const clip = (s: string, n = 20000) => (s.length > n ? s.slice(0, n) + `\n…[truncated ${s.length - n} chars]` : s);
+
+type Hit = { title: string; url: string; snippet?: string };
+const json = async (r: Response) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); };
+const SEARCH: Record<string, (q: string, key: string) => Promise<Hit[]>> = {
+  brave: async (q, key) => ((await json(await fetch(`https://api.search.brave.com/res/v1/web/search?count=8&q=${encodeURIComponent(q)}`, {
+    headers: { Accept: 'application/json', 'X-Subscription-Token': key },
+  }))).web?.results ?? []).map((r: { title: string; url: string; description?: string }) => ({ title: r.title, url: r.url, snippet: r.description })),
+  tavily: async (q, key) => ((await json(await fetch('https://api.tavily.com/search', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, body: JSON.stringify({ query: q, max_results: 8 }),
+  }))).results ?? []).map((r: { title: string; url: string; content?: string }) => ({ title: r.title, url: r.url, snippet: r.content })),
+  // Fallback: scrapes DuckDuckGo HTML, breaks when their markup changes.
+  duckduckgo: async q => {
+    const r = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return [...(await r.text()).matchAll(/class="result__a" href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)].map(m => ({
+      title: m[2].replace(/<[^>]+>/g, ''),
+      url: new URL(m[1], 'https://duckduckgo.com').searchParams.get('uddg') || m[1],
+    }));
+  },
+};
+
+// ponytail: first key per provider, no retry/backoff; rotate keys like the LLM path if rate limits bite.
+export async function webSearch(query: string, c: Pick<Config, 'search' | 'keys'>) {
+  const key = (id: string) => (c.keys[id] ?? []).find(Boolean) ?? '';
+  const keyed = SEARCH_PROVIDERS.map(p => p.id).filter(id => key(id));
+  const order = [...new Set([...(c.search && c.search !== 'auto' ? [c.search] : keyed), 'duckduckgo'])];
+  const errors: string[] = [];
+  for (const id of order) {
+    try {
+      const hits = (await SEARCH[id](query, key(id))).slice(0, 8);
+      if (!hits.length && id !== 'duckduckgo') { errors.push(`${id}: no results`); continue; }
+      return hits.map(h => `${h.title} — ${h.url}${h.snippet ? `\n  ${h.snippet.replace(/\s+/g, ' ').slice(0, 300)}` : ''}`).join('\n') || 'No results';
+    } catch (e) { errors.push(`${id}: ${(e as Error).message}`); }
+  }
+  throw new Error(`web_search failed (${errors.join('; ')})`);
+}
 
 type Cell = { cell_type: string; source: string | string[]; outputs?: { text?: string | string[]; data?: Record<string, unknown>; ename?: string; evalue?: string }[] };
 const joinSrc = (x: string | string[] | undefined) => (Array.isArray(x) ? x.join('') : x ?? '');
@@ -159,17 +196,7 @@ export const tools = {
   web_search: tool({
     description: 'Search the web. Returns titles and URLs.',
     inputSchema: z.object({ query: z.string() }),
-    execute: async ({ query }) => {
-      // ponytail: scrapes DuckDuckGo HTML; swap for SearXNG/Brave API if it breaks
-      const html = await (await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-      })).text();
-      const out = [...html.matchAll(/class="result__a" href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)].slice(0, 8).map(m => {
-        const u = new URL(m[1], 'https://duckduckgo.com').searchParams.get('uddg') || m[1];
-        return `${m[2].replace(/<[^>]+>/g, '')} — ${u}`;
-      });
-      return out.join('\n') || 'No results';
-    },
+    execute: async ({ query }) => webSearch(query, await loadConfig()),
   }),
   create_artifact: tool({
     description: 'Show a self-contained HTML page (or SVG) to the user in the artifact panel. Use for pages, demos, visuals.',

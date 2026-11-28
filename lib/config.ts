@@ -20,6 +20,13 @@ export const PROVIDERS: Provider[] = [
   { id: 'lmstudio', name: 'LM Studio (local)', baseURL: 'http://localhost:1234/v1', keyName: 'LMSTUDIO_API_KEY', example: 'lmstudio/local-model', local: true },
 ];
 
+// web_search providers; keys live in Config.keys under the same id. DuckDuckGo needs no key and is the fallback.
+export const SEARCH_PROVIDERS: Provider[] = [
+  { id: 'brave', name: 'Brave Search (web_search)', baseURL: 'https://api.search.brave.com/res/v1', keyName: 'BRAVE_API_KEY', keysUrl: 'https://api-dashboard.search.brave.com/app/keys', example: 'web_search' },
+  { id: 'tavily', name: 'Tavily (web_search)', baseURL: 'https://api.tavily.com', keyName: 'TAVILY_API_KEY', keysUrl: 'https://app.tavily.com/home', example: 'web_search' },
+];
+export type SearchProvider = 'auto' | 'brave' | 'tavily' | 'duckduckgo';
+
 export type Config = {
   keys: Record<string, string[]>;      // provider id -> numbered keys; key 1 is used first
   custom: Provider[];                  // Custom providers (base URL + keys)
@@ -31,11 +38,12 @@ export type Config = {
   hooks: Record<string, unknown[]>;    // Claude Code settings.json hook format also accepted
   trustedWorkspaces: string[];         // project .claude/settings.json hooks only run here
   allowBash: string[];                 // command prefixes that skip approval
+  search: SearchProvider;              // auto = first keyed provider, then DuckDuckGo
 };
 
 export const DATA = process.env.OPENCLAUDE_DATA || path.join(process.cwd(), 'data');
 const FILE = path.join(DATA, 'config.json');
-const DEFAULTS: Config = { keys: {}, custom: [], model: 'open_router/openrouter/free', workspace: os.homedir(), mode: 'ask', effort: 'medium', mcpServers: {}, hooks: {}, trustedWorkspaces: [], allowBash: [] };
+const DEFAULTS: Config = { keys: {}, custom: [], model: 'open_router/openrouter/free', workspace: os.homedir(), mode: 'ask', effort: 'medium', mcpServers: {}, hooks: {}, trustedWorkspaces: [], allowBash: [], search: 'auto' };
 
 export async function loadConfig(): Promise<Config> {
   try { return { ...DEFAULTS, ...JSON.parse(await fs.readFile(FILE, 'utf8')) }; } catch { return { ...DEFAULTS }; }

@@ -4,7 +4,7 @@ import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import { cronMatches } from '../lib/schedule';
-import { setWorkspace, tools } from '../lib/tools';
+import { setWorkspace, tools, webSearch } from '../lib/tools';
 import { listSkills } from '../lib/skills';
 import { runHooks } from '../lib/hooks';
 import { readJob, startJob } from '../lib/jobs';
@@ -48,6 +48,23 @@ async function main() {
   const out = readJob(id);
   assert(out.includes('exited 0') && out.includes('42'), out);
   assert(!readJob(id).includes('42')); // output is consumed once
+
+  const realFetch = globalThis.fetch;
+  const hit: string[] = [];
+  const stub = (brave: number) => (globalThis.fetch = (async (u: string) => {
+    const host = new URL(u).host; hit.push(host);
+    if (host.includes('brave')) return new Response(JSON.stringify({ web: { results: [{ title: 'B', url: 'https://b.dev', description: 'snip' }] } }), { status: brave });
+    if (host.includes('tavily')) return new Response(JSON.stringify({ results: [{ title: 'T', url: 'https://t.dev' }] }));
+    return new Response('<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fd.dev">D <b>x</b></a>');
+  }) as typeof fetch);
+  stub(200);
+  assert.strictEqual(await webSearch('q', { search: 'auto', keys: { brave: ['k'] } }), 'B — https://b.dev\n  snip');
+  assert.strictEqual(await webSearch('q', { search: 'auto', keys: {} }), 'D x — https://d.dev');
+  assert.strictEqual(await webSearch('q', { search: 'tavily', keys: { brave: ['k'], tavily: ['t'] } }), 'T — https://t.dev');
+  stub(500); hit.length = 0;
+  assert.strictEqual(await webSearch('q', { search: 'brave', keys: { brave: ['k'] } }), 'D x — https://d.dev');
+  assert.deepStrictEqual(hit, ['api.search.brave.com', 'html.duckduckgo.com']);
+  globalThis.fetch = realFetch;
 
   await fs.rm(ws, { recursive: true, force: true });
   console.log('selfcheck ok');

@@ -1,9 +1,10 @@
-import { loadConfig, saveConfig, mask, PROVIDERS, type Config } from '@/lib/config';
+import { loadConfig, saveConfig, mask, PROVIDERS, SEARCH_PROVIDERS, type Config } from '@/lib/config';
 
 const masked = (c: Config) => ({
   ...c,
   keys: Object.fromEntries(Object.entries(c.keys).map(([p, ks]) => [p, ks.map(mask)])),
   catalog: PROVIDERS,
+  searchCatalog: SEARCH_PROVIDERS,
 });
 
 export async function GET() {

@@ -63,6 +63,15 @@ function ModelTab({ cfg, onSave, models, modelErr }: { cfg: Cfg; onSave: Props['
           {['low', 'medium', 'high'].map(x => <option key={x}>{x}</option>)}
         </select>
       </label>
+      <label className="field">Web search
+        <select value={cfg.search ?? 'auto'} onChange={e => onSave({ search: e.target.value as Cfg['search'] })}>
+          <option value="auto">Auto (first provider with a key, then DuckDuckGo)</option>
+          <option value="brave">Brave Search</option>
+          <option value="tavily">Tavily</option>
+          <option value="duckduckgo">DuckDuckGo (no key)</option>
+        </select>
+      </label>
+      <span className="muted">Add Brave or Tavily keys under Providers &amp; keys. DuckDuckGo is always the fallback.</span>
     </section>
   );
 }
@@ -76,7 +85,7 @@ function ProvidersTab({ cfg, onSave }: { cfg: Cfg; onSave: Props['onSave'] }) {
   const [q, setQ] = useState('');
   const [saved, setSaved] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const list = [...cfg.catalog, ...cfg.custom];
+  const list = [...cfg.catalog, ...cfg.custom, ...(cfg.searchCatalog ?? [])];
 
   const setRow = (p: string, rows: string[]) => {
     const next = { ...keys, [p]: rows };
