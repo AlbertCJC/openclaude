@@ -1,30 +1,98 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { promises as fs } from 'fs';
+import { promises as fs, realpathSync } from 'fs';
 import path from 'path';
+import net from 'net';
+import { lookup } from 'dns/promises';
 import { exec } from 'child_process';
 import { killJob, readJob, startJob } from './jobs';
-import { loadConfig, SEARCH_PROVIDERS, type Config } from './config';
+import { DATA, loadConfig, SEARCH_PROVIDERS, type Config } from './config';
 
 export let WORKSPACE = path.resolve(process.env.WORKSPACE || process.cwd());
 export const setWorkspace = (w: string) => { WORKSPACE = path.resolve(w); }; // ponytail: module-global, fine for single-user desktop app
 
+const fold = (p: string) => (process.platform === 'win32' || process.platform === 'darwin' ? p.toLowerCase() : p);
+export function isInside(child: string, parent: string) {
+  const rel = path.relative(fold(parent), fold(child));
+  return rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel);
+}
+
+// Realpath of the nearest existing ancestor, so symlinks/junctions, 8.3 names and trailing dots resolve to the real target.
+function real(p: string) {
+  let cur = p, rest = '';
+  for (;;) {
+    try { return path.join(realpathSync.native(cur), rest); } catch {
+      const up = path.dirname(cur);
+      if (up === cur) return p;
+      rest = path.join(path.basename(cur), rest);
+      cur = up;
+    }
+  }
+}
+const dataDirs = () => [path.resolve(DATA), real(path.resolve(DATA))];
+const inData = (p: string) => dataDirs().some(d => isInside(p, d));
+
 export function jail(p: string) {
   const full = path.resolve(WORKSPACE, p);
-  const rel = path.relative(WORKSPACE, full);
-  if (rel.startsWith('..') || path.isAbsolute(rel)) throw new Error(`Path outside workspace: ${p}`);
+  const r = real(full);
+  if (!isInside(full, WORKSPACE) || !isInside(r, real(WORKSPACE))) throw new Error(`Path outside workspace: ${p}`);
+  if (inData(full) || inData(r)) throw new Error(`Path is in app data dir: ${p}`); // config.json holds API keys, hooks, allowBash
   return full;
+}
+
+/** allowBash auto-approves only a plain single command: no separators, expansions, redirects or quotes on either shell. */
+export const bashAutoAllowed = (cmd: string, allow: string[] = []) =>
+  /^[\w ./:=@+,-]+$/.test(cmd) && allow.some(p => p && (cmd === p || cmd.startsWith(p + ' ')));
+
+// Folders whose files run as code later: our hooks/skills, git hooks/config, husky hooks, VS Code tasks.
+const CODE_DIRS = ['.claude', '.git', '.husky', '.vscode'];
+const CODE_DIR_IN_CMD = /(^|[\\/\s"'=])\.(claude|git|husky|vscode)[. ]*([\\/\s"']|$)/i;
+/** Writes that can plant code which runs without approval, or reach app data, must always ask, in every mode. */
+export function touchesProtected(name: string, input: unknown) {
+  const i = (input ?? {}) as { path?: unknown; command?: unknown };
+  if (['write_file', 'edit_file', 'notebook_edit'].includes(name))
+    return path.relative(WORKSPACE, path.resolve(WORKSPACE, String(i.path ?? ''))).split(/[\\/]/)
+      .some(seg => CODE_DIRS.includes(seg.toLowerCase().replace(/[. ]+$/, '')));
+  if (name === 'bash') {
+    const cmd = String(i.command ?? '');
+    return CODE_DIR_IN_CMD.test(cmd) || dataDirs().some(d => fold(cmd).includes(fold(d)));
+  }
+  return false;
 }
 
 async function walk(dir: string, out: string[] = [], depth = 0): Promise<string[]> {
   if (depth > 6 || out.length > 2000) return out;
   for (const e of await fs.readdir(dir, { withFileTypes: true })) {
-    if (['node_modules', '.git', '.next'].includes(e.name)) continue;
+    if (['node_modules', '.git', '.next'].includes(e.name) || e.isSymbolicLink()) continue; // links could point outside the jail
     const f = path.join(dir, e.name);
+    if (inData(f)) continue;
     if (e.isDirectory()) await walk(f, out, depth + 1);
     else out.push(path.relative(WORKSPACE, f).replaceAll('\\', '/'));
   }
   return out;
+}
+
+const BLOCKED = new net.BlockList();
+for (const [a, n] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.168.0.0', 16], ['198.18.0.0', 15], ['224.0.0.0', 4]] as const)
+  BLOCKED.addSubnet(a, n, 'ipv4');
+// Includes IPv4-mapped, NAT64 and 6to4 prefixes, which can all embed a private IPv4 address.
+for (const [a, n] of [['::', 128], ['::1', 128], ['::ffff:0:0', 96], ['64:ff9b::', 96], ['2002::', 16], ['fc00::', 7], ['fe80::', 10]] as const)
+  BLOCKED.addSubnet(a, n, 'ipv6');
+
+// ponytail: checks DNS then fetches, so a rebinding resolver can race it; pin the resolved IP via a custom agent if that matters.
+export async function fetchPublic(url: string, init: RequestInit = {}) {
+  for (let hop = 0; hop < 6; hop++) {
+    const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('Only http(s) URLs');
+    const host = u.hostname.replace(/^\[|\]$/g, '');
+    const addrs = net.isIP(host) ? [{ address: host, family: net.isIP(host) }] : await lookup(host, { all: true });
+    if (addrs.some(a => BLOCKED.check(a.address, a.family === 6 ? 'ipv6' : 'ipv4'))) throw new Error(`Refusing private or loopback address: ${u.host}`);
+    const r = await fetch(u, { ...init, redirect: 'manual' });
+    const loc = r.status >= 300 && r.status < 400 && r.headers.get('location');
+    if (!loc) return r;
+    url = new URL(loc, u).href;
+  }
+  throw new Error('Too many redirects');
 }
 
 const clip = (s: string, n = 20000) => (s.length > n ? s.slice(0, n) + `\n…[truncated ${s.length - n} chars]` : s);
@@ -188,8 +256,7 @@ export const tools = {
     description: 'Fetch a URL and return its text content (HTML stripped).',
     inputSchema: z.object({ url: z.string().url() }),
     execute: async ({ url }) => {
-      if (!/^https?:\/\//.test(url)) throw new Error('Only http(s) URLs');
-      const html = await (await fetch(url, { headers: { 'User-Agent': 'OpenClaude/0.1' } })).text();
+      const html = await (await fetchPublic(url, { headers: { 'User-Agent': 'OpenClaude/0.1' } })).text();
       return clip(html.replace(/<(script|style)[\s\S]*?<\/\1>/gi, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '));
     },
   }),

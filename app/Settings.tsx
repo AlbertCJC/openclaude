@@ -197,7 +197,7 @@ function PermissionsTab({ cfg, onSave }: { cfg: Cfg; onSave: Props['onSave'] }) 
     <section className="setsec">
       <h3>Permissions</h3>
       <b>Bash commands that run without asking</b>
-      <span className="muted">Commands starting with one of these prefixes skip the approval prompt.</span>
+      <span className="muted">Commands starting with one of these prefixes skip the approval prompt (single plain commands only; anything touching .claude, .git, .husky or .vscode always asks). A prefix that runs workspace code, like <code>npm run</code>, <code>node</code> or <code>python</code>, is as powerful as allowing all of bash, because the agent can write that code.</span>
       {allow.length === 0 && <span className="muted">(none)</span>}
       {allow.map(x => (
         <div key={x} className="row listrow"><code style={{ flex: 1 }}>{x}</code>

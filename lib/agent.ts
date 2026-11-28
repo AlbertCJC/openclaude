@@ -1,7 +1,7 @@
 import { generateText, isStepCount, tool, type ToolSet } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { z } from 'zod';
-import { setWorkspace, tools as baseTools, WRITE_TOOLS } from './tools';
+import { bashAutoAllowed, setWorkspace, tools as baseTools, touchesProtected, WRITE_TOOLS } from './tools';
 import { resolveModel, type Config } from './config';
 import { buildSystem } from './systemPrompt';
 import { getMcp } from './mcp';
@@ -87,12 +87,9 @@ export async function prepareAgent(c: Config, userPrompt = '') {
     if (pre.blocked) return { type: 'denied' as const, reason: pre.blocked };
     if (!isWrite(toolCall.toolName)) return undefined;
     if (c.mode === 'plan') return { type: 'denied' as const, reason: 'Plan mode is read-only' };
-    if (toolCall.toolName === 'bash') {
-      const cmd = String((toolCall.input as { command?: string })?.command ?? '').trim();
-      // Allow-listed prefixes only for single commands; chained commands always ask.
-      if (!/[;&|`$<>]/.test(cmd) && (c.allowBash ?? []).some(p => p && (cmd === p || cmd.startsWith(p + ' ')))) return undefined;
-      return 'user-approval' as const;
-    }
+    if (touchesProtected(toolCall.toolName, toolCall.input)) return 'user-approval' as const;
+    if (toolCall.toolName === 'bash')
+      return bashAutoAllowed(String((toolCall.input as { command?: string })?.command ?? ''), c.allowBash) ? undefined : 'user-approval' as const;
     return c.mode === 'auto' ? undefined : 'user-approval' as const;
   };
 

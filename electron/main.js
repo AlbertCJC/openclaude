@@ -4,6 +4,10 @@ const http = require('http');
 const path = require('path');
 
 const fs = require('fs');
+const crypto = require('crypto');
+const { authorized } = require('./auth');
+
+const TOKEN = crypto.randomBytes(32).toString('hex'); // per launch; handed to the window as an httpOnly cookie
 
 const dev = !app.isPackaged && process.env.NODE_ENV !== 'production';
 process.env.OPENCLAUDE_DATA = app.getPath('userData'); // config.json with API keys lives here, per-user
@@ -24,7 +28,13 @@ async function startServer() {
   const nextApp = next({ dev, dir: path.join(__dirname, '..') });
   await nextApp.prepare();
   const handle = nextApp.getRequestHandler();
-  const server = http.createServer((req, res) => handle(req, res));
+  const server = http.createServer((req, res) => {
+    if (!authorized(req, TOKEN, server.address().port)) { // every path, so no URL-normalisation tricks around an /api prefix
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      return res.end('forbidden');
+    }
+    handle(req, res);
+  });
   await new Promise(r => server.listen(0, '127.0.0.1', r)); // localhost only, random free port
   return `http://127.0.0.1:${server.address().port}`;
 }
@@ -47,6 +57,7 @@ async function createWindow() {
     const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
     return r.canceled ? null : r.filePaths[0];
   });
+  await win.webContents.session.cookies.set({ url, name: 'oc_token', value: TOKEN, httpOnly: true, sameSite: 'strict' });
   await win.loadURL(url);
 }
 
