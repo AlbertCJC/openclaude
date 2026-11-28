@@ -44,16 +44,18 @@ export function jail(p: string) {
 export const bashAutoAllowed = (cmd: string, allow: string[] = []) =>
   /^[\w ./:=@+,-]+$/.test(cmd) && allow.some(p => p && (cmd === p || cmd.startsWith(p + ' ')));
 
-const CLAUDE_IN_CMD = /(^|[\\/\s"'=])\.claude[. ]*([\\/\s"']|$)/i;
-/** Writes that can plant hooks/skills (.claude/**) or reach app data must always ask, in every mode. */
+// Folders whose files run as code later: our hooks/skills, git hooks/config, husky hooks, VS Code tasks.
+const CODE_DIRS = ['.claude', '.git', '.husky', '.vscode'];
+const CODE_DIR_IN_CMD = /(^|[\\/\s"'=])\.(claude|git|husky|vscode)[. ]*([\\/\s"']|$)/i;
+/** Writes that can plant code which runs without approval, or reach app data, must always ask, in every mode. */
 export function touchesProtected(name: string, input: unknown) {
   const i = (input ?? {}) as { path?: unknown; command?: unknown };
   if (['write_file', 'edit_file', 'notebook_edit'].includes(name))
     return path.relative(WORKSPACE, path.resolve(WORKSPACE, String(i.path ?? ''))).split(/[\\/]/)
-      .some(seg => seg.toLowerCase().replace(/[. ]+$/, '') === '.claude');
+      .some(seg => CODE_DIRS.includes(seg.toLowerCase().replace(/[. ]+$/, '')));
   if (name === 'bash') {
     const cmd = String(i.command ?? '');
-    return CLAUDE_IN_CMD.test(cmd) || dataDirs().some(d => fold(cmd).includes(fold(d)));
+    return CODE_DIR_IN_CMD.test(cmd) || dataDirs().some(d => fold(cmd).includes(fold(d)));
   }
   return false;
 }
@@ -71,9 +73,11 @@ async function walk(dir: string, out: string[] = [], depth = 0): Promise<string[
 }
 
 const BLOCKED = new net.BlockList();
-for (const [a, n] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.168.0.0', 16]] as const)
+for (const [a, n] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.168.0.0', 16], ['198.18.0.0', 15], ['224.0.0.0', 4]] as const)
   BLOCKED.addSubnet(a, n, 'ipv4');
-for (const [a, n] of [['::', 128], ['::1', 128], ['::ffff:0:0', 96], ['fc00::', 7], ['fe80::', 10]] as const) BLOCKED.addSubnet(a, n, 'ipv6');
+// Includes IPv4-mapped, NAT64 and 6to4 prefixes, which can all embed a private IPv4 address.
+for (const [a, n] of [['::', 128], ['::1', 128], ['::ffff:0:0', 96], ['64:ff9b::', 96], ['2002::', 16], ['fc00::', 7], ['fe80::', 10]] as const)
+  BLOCKED.addSubnet(a, n, 'ipv6');
 
 // ponytail: checks DNS then fetches, so a rebinding resolver can race it; pin the resolved IP via a custom agent if that matters.
 export async function fetchPublic(url: string, init: RequestInit = {}) {

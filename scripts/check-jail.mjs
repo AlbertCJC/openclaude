@@ -42,14 +42,15 @@ for (const bad of ['git status\nrm -rf x', 'git status\r\nrm x', 'git status\trm
 // #27: anything that can plant .claude hooks/skills, or touch app data, always asks.
 for (const [name, input] of [['write_file', { path: '.claude/settings.json' }], ['edit_file', { path: '.Claude\\settings.json' }],
   ['notebook_edit', { path: 'sub/.claude./x' }], ['bash', { command: 'echo x > .claude/settings.json' }],
-  ['bash', { command: 'node x.js .claude' }], ['bash', { command: `type ${path.join(ws, 'data', 'config.json')}` }]])
+  ['bash', { command: 'node x.js .claude' }], ['write_file', { path: '.git/hooks/pre-commit' }], ['edit_file', { path: '.git/config' }],
+  ['write_file', { path: '.husky/pre-commit' }], ['write_file', { path: '.vscode/tasks.json' }], ['bash', { command: 'node x.js .git/hooks/post-checkout' }], ['bash', { command: `type ${path.join(ws, 'data', 'config.json')}` }]])
   assert.ok(touchesProtected(name, input), `${name} ${JSON.stringify(input)}`);
-for (const [name, input] of [['write_file', { path: 'src/claude.ts' }], ['bash', { command: 'git status' }], ['read_file', { path: '.claude/x' }]])
+for (const [name, input] of [['write_file', { path: 'src/claude.ts' }], ['write_file', { path: '.github/workflows/ci.yml' }], ['write_file', { path: 'docs/git.md' }], ['bash', { command: 'git status' }], ['read_file', { path: '.claude/x' }]])
   assert.ok(!touchesProtected(name, input), `${name} ${JSON.stringify(input)}`);
 
 // #8: web_fetch refuses loopback/private targets (rejected before any request is sent).
 for (const u of ['http://127.0.0.1:3000/api/config', 'http://localhost/', 'http://[::1]/', 'http://[::ffff:7f00:1]/',
-  'http://169.254.169.254/latest', 'http://10.0.0.1/', 'http://2130706433/', 'file:///etc/passwd'])
+  'http://169.254.169.254/latest', 'http://10.0.0.1/', 'http://[64:ff9b::7f00:1]/', 'http://[2002:7f00:1::]/', 'http://198.18.0.1/', 'http://224.0.0.1/', 'http://2130706433/', 'file:///etc/passwd'])
   await assert.rejects(fetchPublic(u), /private or loopback|Only http/, u);
 
 fs.rmSync(ws, { recursive: true, force: true });

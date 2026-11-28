@@ -7,7 +7,7 @@ A Claude-style desktop assistant that works with any OpenAI-compatible model, in
 - **Multiple keys per provider:** key 1 is used first; on an auth or rate-limit error the next key is tried.
 - **Agent tools:** `list_files`, `read_file`, `grep`, `write_file`, `edit_file`, `bash`, `web_fetch`, `web_search`, `create_artifact`. Up to 20 tool steps per reply.
 - **Permission modes:** *Ask before edits*, *Auto-edit* (still asks before shell commands), *Plan* (read-only).
-  - Writes to `.claude/**` (hooks, skills) and commands mentioning `.claude` or the app data folder always ask, in every mode. The app data folder (config, keys, schedules) is outside the file tools' reach.
+  - Writes to `.claude/**` (hooks, skills), `.git/**`, `.husky/**` and `.vscode/**`, and commands mentioning those folders or the app data folder, always ask, in every mode. The app data folder (config, keys, schedules) is outside the file tools' reach.
   - Allow-listed bash prefixes only cover a single plain command. A prefix that runs workspace code (`npm run`, `node`, `python`) is equivalent to full bash, since the agent can edit that code; it can also reach `.claude/**` indirectly (for example `git checkout` of a branch that contains it).
 - **Artifacts:** HTML pages open in a resizable side panel with Preview, Code, Copy and Download. They run in a sandboxed frame.
 - **Desktop app:** Electron wrapper with a native folder picker. The server only listens on `127.0.0.1`.
