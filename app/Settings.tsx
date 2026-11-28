@@ -12,7 +12,7 @@ const TABS = [
 ] as const;
 export type SettingsTab = typeof TABS[number]['id'];
 
-type Props = { cfg: Cfg; onSave: (c: Partial<Cfg>) => Promise<void>; models: string[]; modelErr: string; tab: SettingsTab; setTab: (t: SettingsTab) => void };
+type Props = { cfg: Cfg; onSave: (c: Partial<Cfg>) => Promise<boolean>; models: string[]; modelErr: string; tab: SettingsTab; setTab: (t: SettingsTab) => void };
 
 export function Settings({ cfg, onSave, models, modelErr, tab, setTab }: Props) {
   return (
@@ -169,19 +169,19 @@ function ProvidersTab({ cfg, onSave }: { cfg: Cfg; onSave: Props['onSave'] }) {
   );
 }
 
-function JsonTab({ title, hint, value, onSave }: { title: string; hint: React.ReactNode; value: unknown; onSave: (v: Record<string, never>) => Promise<void> }) {
+function JsonTab({ title, hint, value, onSave }: { title: string; hint: React.ReactNode; value: unknown; onSave: (v: Record<string, never>) => Promise<boolean> }) {
   const [text, setText] = useState(JSON.stringify(value ?? {}, null, 2));
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   return (
     <section className="setsec">
       <h3>{title}</h3>
       <span className="muted">{hint}</span>
-      <textarea aria-label={`${title} JSON`} rows={14} className="mono" value={text} onChange={e => { setText(e.target.value); setMsg(null); }} />
+      <textarea aria-label={`${title} JSON`} rows={14} className="mono" spellCheck={false} autoComplete="off" value={text} onChange={e => { setText(e.target.value); setMsg(null); }} />
       <div className="row">
         <button className="primary" onClick={async () => {
           let v;
           try { v = JSON.parse(text || '{}'); } catch (e) { return setMsg({ ok: false, text: `Invalid JSON: ${(e as Error).message}` }); }
-          await onSave(v); setMsg({ ok: true, text: 'Saved' });
+          setMsg(await onSave(v) ? { ok: true, text: 'Saved' } : { ok: false, text: 'Not saved' });
         }}>Save</button>
         {msg && <span className={msg.ok ? 'muted ok' : 'errtext'}>{msg.text}</span>}
       </div>

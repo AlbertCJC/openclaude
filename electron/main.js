@@ -8,6 +8,19 @@ const crypto = require('crypto');
 const { authorized } = require('./auth');
 
 const TOKEN = crypto.randomBytes(32).toString('hex'); // per launch; handed to the window as an httpOnly cookie
+process.env.OC_ADMIN = crypto.randomBytes(32).toString('hex'); // per launch; never leaves this process. Lets main write protected config.
+const PROTECTED = ['hooks', 'allowBash', 'trustedWorkspaces', 'mcpServers', 'custom']; // keep in sync with lib/config.ts
+
+// Only the entries that differ, so a long harmless value can't push the real change out of view.
+function diffLines(a, b) {
+  const j = x => JSON.stringify(x);
+  if (Array.isArray(a) || Array.isArray(b)) {
+    const A = (a || []).map(j), B = (b || []).map(j);
+    return [...B.filter(x => !A.includes(x)).map(x => `+ ${x}`), ...A.filter(x => !B.includes(x)).map(x => `- ${x}`)];
+  }
+  a = a || {}; b = b || {};
+  return [...Object.keys(b).filter(k => j(a[k]) !== j(b[k])).map(k => `+ ${k}: ${j(b[k])}`), ...Object.keys(a).filter(k => !(k in b)).map(k => `- ${k}`)];
+}
 
 const dev = !app.isPackaged && process.env.NODE_ENV !== 'production';
 process.env.OPENCLAUDE_DATA = app.getPath('userData'); // config.json with API keys lives here, per-user
@@ -56,6 +69,31 @@ async function createWindow() {
   ipcMain.handle('pick-folder', async () => {
     const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
     return r.canceled ? null : r.filePaths[0];
+  });
+  // Protected settings (hooks, allowBash, ...) can run commands, so the user confirms them in a native dialog the page can't fake.
+  ipcMain.removeHandler('confirm-config');
+  ipcMain.handle('confirm-config', async (e, patch) => {
+    if (!e.senderFrame || !e.senderFrame.url.startsWith(url + '/')) throw new Error('forbidden');
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('bad patch');
+    const headers = { cookie: `oc_token=${TOKEN}`, 'content-type': 'application/json' };
+    const cur = await (await fetch(`${url}/api/config`, { headers })).json();
+    const changed = PROTECTED.filter(k => k in patch && JSON.stringify(patch[k]) !== JSON.stringify(cur[k]));
+    if (changed.length) {
+      const diff = changed.map(k => `${k}:\n${diffLines(cur[k], patch[k]).join('\n')}`).join('\n\n');
+      // Never truncate what the user approves.
+      if (diff.length > 1000) throw new Error('Change too large to confirm here; edit config.json in the app data folder instead.');
+      const { response } = await dialog.showMessageBox(win, {
+        type: 'warning', title: 'Confirm settings change', buttons: ['Cancel', 'Apply'], defaultId: 0, cancelId: 0, noLink: true,
+        message: `Change ${changed.join(', ')}? These settings let the agent run commands or send API keys to another server.`,
+        detail: diff,
+      });
+      if (response !== 1) return null;
+      headers['x-oc-admin'] = process.env.OC_ADMIN;
+    }
+    const r = await fetch(`${url}/api/config`, { method: 'PUT', headers, body: JSON.stringify(patch) });
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+    return body;
   });
   await win.webContents.session.cookies.set({ url, name: 'oc_token', value: TOKEN, httpOnly: true, sameSite: 'strict' });
   await win.loadURL(url);
