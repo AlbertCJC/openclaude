@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import { convertToModelMessages, createUIMessageStreamResponse, isStepCount, streamText, toUIMessageStream, type UIMessage } from 'ai';
 import { loadConfig } from '@/lib/config';
 import { prepareAgent } from '@/lib/agent';
@@ -6,8 +7,20 @@ import { ensureScheduler } from '@/lib/schedule';
 
 export const maxDuration = 300;
 
+// The client replays the whole history, approvals included. Signing approval requests (bound to tool name and input)
+// means a forged or edited "approved" part in that history is rejected instead of executed.
+// ponytail: per-process secret, so approvals still pending when the app restarts must be asked again.
+const APPROVAL_SECRET = randomBytes(32);
+// A signature proves we issued the request, not that it is unused: stripping the output and resending would rerun the tool.
+const USED_APPROVALS = new Set<string>(); // ponytail: grows for the process lifetime; ids are tiny
+
 export async function POST(req: Request) {
   const { messages, chatId: id }: { messages: UIMessage[]; chatId?: string } = await req.json();
+  for (const m of messages) for (const p of m.parts as { state?: string; approval?: { id?: string; approved?: boolean } }[]) {
+    if (p.state !== 'approval-responded' || !p.approval?.approved || !p.approval.id) continue;
+    if (USED_APPROVALS.has(p.approval.id)) return new Response('This tool approval was already used.', { status: 400 });
+    USED_APPROVALS.add(p.approval.id);
+  }
   const c = await loadConfig();
   ensureScheduler();
   const last = messages.at(-1);
@@ -22,6 +35,7 @@ export async function POST(req: Request) {
     tools: a.tools,
     stopWhen: isStepCount(20),
     toolApproval: a.toolApproval,
+    experimental_toolApprovalSecret: APPROVAL_SECRET,
     onFinish: ({ totalUsage }) => { if (id) addUsage(id, totalUsage.inputTokens ?? 0, totalUsage.outputTokens ?? 0).catch(() => {}); },
   });
   return createUIMessageStreamResponse({ stream: toUIMessageStream({ stream: result.stream, onError: e => (e instanceof Error ? e.message : String(e)) }) });
