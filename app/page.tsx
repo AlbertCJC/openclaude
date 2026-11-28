@@ -13,7 +13,9 @@ import type { Cfg } from './Providers';
 import { Settings, type SettingsTab } from './Settings';
 import { COMMANDS, PROMPTS, parseCommand, type Command } from '@/lib/commands';
 
-declare global { interface Window { desktop?: { pickFolder: () => Promise<string | null> } } }
+declare global { interface Window { desktop?: { pickFolder: () => Promise<string | null>; confirmConfig: (p: Partial<Cfg>) => Promise<Cfg | null> } } }
+// Changing these needs the desktop app's native confirm (see electron/main.js); keep in sync with lib/config.ts PROTECTED.
+const PROTECTED = ['hooks', 'allowBash', 'trustedWorkspaces', 'mcpServers', 'custom'];
 
 const TOOL_ICON: Record<string, typeof Wrench> = {
   list_files: FileText, read_file: FileText, grep: Search, write_file: FileText, edit_file: FileText,
@@ -50,9 +52,21 @@ export default function Page() {
   const [models, setModels] = useState<string[]>([]);
   const [modelErr, setModelErr] = useState('');
   useEffect(() => { fetch('/api/config').then(r => r.json()).then(setCfg); }, []);
-  const save = async (p: Partial<Cfg>) => {
-    const r = await fetch('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) });
-    setCfg(await r.json());
+  /** Saves a config patch; false when cancelled or rejected (the reason is shown). */
+  const save = async (p: Partial<Cfg>): Promise<boolean> => {
+    try {
+      if (Object.keys(p).some(k => PROTECTED.includes(k))) {
+        if (!window.desktop?.confirmConfig) throw new Error('This setting can only be changed in the OpenClaude desktop app.');
+        const c = await window.desktop.confirmConfig(p);
+        if (c) setCfg(c);
+        return !!c;
+      }
+      const r = await fetch('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) });
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+      setCfg(body);
+      return true;
+    } catch (e) { alert(`Settings not saved: ${(e as Error).message}`); return false; }
   };
   const providerId = cfg?.model.split('/')[0] ?? '';
   const keyCount = cfg?.keys[providerId]?.length ?? 0;
@@ -151,13 +165,13 @@ export default function Page() {
     if (name === 'schedule') return status_('schedules').then((l: any[]) => setNote(l.length ? l.map(x => `${x.id}  ${x.cron}  ${x.prompt}`).join('\n') + '\n\nAsk me to create or delete schedules.' : 'No schedules. Ask me e.g. "every weekday at 9, summarize git log".'));
     if (name === 'permissions') {
       const [op, ...rest] = arg.split(' '); const pre = rest.join(' ').trim(); const cur = cfg?.allowBash ?? [];
-      if (op === 'add' && pre) return save({ allowBash: [...new Set([...cur, pre])] }).then(() => setNote(`Allowed: ${pre}`));
-      if (op === 'remove' && pre) return save({ allowBash: cur.filter(x => x !== pre) }).then(() => setNote(`Removed: ${pre}`));
+      if (op === 'add' && pre) return save({ allowBash: [...new Set([...cur, pre])] }).then(ok => ok && setNote(`Allowed: ${pre}`));
+      if (op === 'remove' && pre) return save({ allowBash: cur.filter(x => x !== pre) }).then(ok => ok && setNote(`Removed: ${pre}`));
       return setNote(`Bash prefixes that run without asking:\n${cur.join('\n') || '(none)'}\n\n/permissions add <prefix> · /permissions remove <prefix>`);
     }
     if (name === 'trust') {
       if (!cfg || !confirm(`Run hooks from ${cfg.workspace}\\.claude\\settings.json? They execute shell commands on your computer.`)) return;
-      return save({ trustedWorkspaces: [...new Set([...(cfg.trustedWorkspaces ?? []), cfg.workspace])] }).then(() => setNote('Workspace trusted: its hooks will run.'));
+      return save({ trustedWorkspaces: [...new Set([...(cfg.trustedWorkspaces ?? []), cfg.workspace])] }).then(ok => ok && setNote('Workspace trusted: its hooks will run.'));
     }
     if (name === 'compact') { if (!messages.length) return setNote('Nothing to compact.'); setCompacting(true); }
     sendMessage({ text: PROMPTS[name] + (arg ? `\n\n${arg}` : '') });

@@ -1,6 +1,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
+import { z } from 'zod';
 import type { McpServer } from './mcp';
 
 export type Provider = { id: string; name: string; baseURL: string; keyName: string; keysUrl?: string; example: string; local?: boolean };
@@ -40,6 +41,25 @@ export type Config = {
   allowBash: string[];                 // command prefixes that skip approval
   search: SearchProvider;              // auto = first keyed provider, then DuckDuckGo
 };
+
+const str = z.record(z.string(), z.string());
+const ProviderSchema = z.object({
+  id: z.string().regex(/^[a-z0-9_]+$/), name: z.string(), baseURL: z.string().regex(/^https?:\/\//), keyName: z.string(),
+  keysUrl: z.string().optional(), example: z.string(), local: z.boolean().optional(),
+}).strict();
+const McpSchema = z.union([
+  z.object({ command: z.string().min(1), args: z.array(z.string()).optional(), env: str.optional() }).strict(),
+  z.object({ url: z.string().regex(/^https?:\/\//), headers: str.optional() }).strict(),
+]);
+/** What PUT /api/config accepts: any subset of Config, nothing else. */
+export const ConfigPatch = z.object({
+  keys: z.record(z.string(), z.array(z.string())), custom: z.array(ProviderSchema), model: z.string(), workspace: z.string(),
+  mode: z.enum(['ask', 'auto', 'plan']), effort: z.enum(['low', 'medium', 'high']), mcpServers: z.record(z.string(), McpSchema),
+  hooks: z.record(z.string(), z.array(z.unknown())), trustedWorkspaces: z.array(z.string()), allowBash: z.array(z.string()),
+  search: z.enum(['auto', 'brave', 'tavily', 'duckduckgo']),
+}).partial().strict();
+/** Fields that let the agent run commands or send keys elsewhere: only the desktop confirm dialog may change them. */
+export const PROTECTED = ['hooks', 'allowBash', 'trustedWorkspaces', 'mcpServers', 'custom'] as const;
 
 export const DATA = process.env.OPENCLAUDE_DATA || path.join(process.cwd(), 'data');
 const FILE = path.join(DATA, 'config.json');
